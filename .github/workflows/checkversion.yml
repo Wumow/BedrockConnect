@@ -16,8 +16,8 @@ jobs:
         id: dlversion
         run: |
           RandNum=$((1 + $RANDOM % 5000))
-          curl -H "Accept-Encoding: identity" -H "Accept-Language: en" -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.$RandNum.212 Safari/537.36" -o $HOME/version.html https://www.minecraft.net/en-us/download/server/bedrock
-          LatestURL=$(grep -o 'https://minecraft.azureedge.net/bin-linux/[^"]*' $HOME/version.html)
+          curl -H "Accept-Encoding: identity" -H "Accept-Language: en" -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.$RandNum.212 Safari/537.36" -o $HOME/version.html https://net-secondary.web.minecraft-services.net/api/v1.0/download/links
+          LatestURL=$(grep -o 'https://www.minecraft.net/bedrockdedicatedserver/bin-linux/[^"]*' $HOME/version.html)
           echo "::set-output name=downloadversion::$(echo "$LatestURL" | sed -e 's/.*server-//g' -e 's/.zip//')"
 
       - name: Get Release Notes
@@ -33,7 +33,7 @@ jobs:
 
       - name: Latest supported version from repo
         id: suppversion
-        run: echo "::set-output name=supportversion::$(cat .github/assets/supportedVersion)"
+        run: echo "supportversion=${{ vars.SUPPORTED_VERSION }}" >> $GITHUB_OUTPUT
 
       - uses: nickderobertis/check-if-issue-exists-action@master
         name: Check if Issue Exists
@@ -55,9 +55,8 @@ jobs:
 
             Release Notes: ${{ steps.dlversionnotes.outputs.downloadversionnotes }}
 
-            - [X] Notify @Pugmatt @kmpoppe @Camotoy @CrafterPika
-            - [ ] Update source code
-            - [ ] Update [.github/assets/supportedVersion](../blob/master/.github/assets/supportedVersion) to the latest version
+            - [ ] Update source code (if needed)
+            - [ ] Update SUPPORTED_VERSION in Actions Repository variables to the latest version
 
           labels: |
             enhancement

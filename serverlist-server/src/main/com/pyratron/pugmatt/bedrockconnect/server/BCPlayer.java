@@ -1,26 +1,27 @@
-package main.com.pyratron.pugmatt.bedrockconnect;
+package main.com.pyratron.pugmatt.bedrockconnect.server;
 
-import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
-import main.com.pyratron.pugmatt.bedrockconnect.gui.UIComponents;
-import main.com.pyratron.pugmatt.bedrockconnect.gui.UIForms;
-import main.com.pyratron.pugmatt.bedrockconnect.sql.Data;
+import main.com.pyratron.pugmatt.bedrockconnect.BedrockConnect;
+import main.com.pyratron.pugmatt.bedrockconnect.config.Custom.CustomServerGroup;
+import main.com.pyratron.pugmatt.bedrockconnect.server.gui.UIComponents;
+import main.com.pyratron.pugmatt.bedrockconnect.server.gui.UIForms;
+
 import org.cloudburstmc.math.vector.Vector2f;
 import org.cloudburstmc.math.vector.Vector3f;
 import org.cloudburstmc.math.vector.Vector3i;
 import org.cloudburstmc.nbt.NBTOutputStream;
+import org.cloudburstmc.nbt.NbtList;
 import org.cloudburstmc.nbt.NbtMap;
 import org.cloudburstmc.nbt.NbtUtils;
 import org.cloudburstmc.protocol.bedrock.BedrockServerSession;
 import org.cloudburstmc.protocol.bedrock.data.*;
-import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData;
 import org.cloudburstmc.protocol.bedrock.packet.*;
 import org.cloudburstmc.protocol.common.util.OptionalBoolean;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.*;
 
@@ -31,15 +32,19 @@ public class BCPlayer {
 
     private int serverLimit;
 
+    private String displayName;
     private String uuid;
 
     private LocalTime lastAction;
+    private LocalDateTime viewedMotd;
 
     private int currentForm = 0;
     private LocalTime movementOpenCoolDown = LocalTime.now();
 
-    public int editingServer = -1;
-    public int selectedGroup = -1;
+    private int editingServer = -1;
+    private int selectedGroup = -1;
+
+    private boolean newPlayer = false;
 
     private static final NbtMap EMPTY_TAG = NbtMap.EMPTY;
     private static final byte[] EMPTY_LEVEL_CHUNK_DATA;
@@ -59,12 +64,15 @@ public class BCPlayer {
     }
 
 
-    public BCPlayer(String uuid, BedrockServerSession session, List<String> serverList, int serverLimit) {
+    public BCPlayer(String displayName, String uuid, BedrockServerSession session, List<String> serverList, int serverLimit, boolean newPlayer, LocalDateTime viewedMotd) {
+        this.displayName = displayName;
         this.uuid = uuid;
         this.session = session;
         this.serverList = serverList;
         this.serverLimit = serverLimit;
         this.lastAction = LocalTime.now();
+        this.viewedMotd = viewedMotd;
+        this.newPlayer = newPlayer;
 
         if(session != null && session.isConnected())
         joinGame();
@@ -74,9 +82,10 @@ public class BCPlayer {
         return session;
     }
 
-    public void disconnect(String reason, Server server) {
-        session.disconnect(reason);
-        server.removePlayer(this);
+    public void disconnect(String reason) {
+        if (session != null && session.isConnected())
+            session.disconnect(reason);
+        BedrockConnect.getServer().removePlayer(this);
     }
 
     public List<String> getServerList() {
@@ -84,14 +93,14 @@ public class BCPlayer {
     }
 
     public void setServerList(List<String> serverList) {
-        BedrockConnect.data.setValueString("servers", UIComponents.serversToFormData(serverList), serverList, uuid);
+        BedrockConnect.getDataUtil().setValueString("servers", UIComponents.serversToFormData(serverList), serverList, uuid);
         this.serverList = serverList;
     }
 
     public boolean addServer(String address, String port, String name) {
         List<String> serverList = getServerList();
         if (serverList.size() >= getServerLimit())
-            createError(BedrockConnect.language.getWording("error", "serverLimit").replace("%MAX_SERVERS%", Integer.toString(getServerLimit())));
+            createError(BedrockConnect.getConfig().getLanguage().getWording("error", "serverLimit").replace("%MAX_SERVERS%", Integer.toString(getServerLimit())));
         else {
             String server;
             // If display name is included from form input, add as parameter
@@ -106,6 +115,10 @@ public class BCPlayer {
         return false;
     }
 
+    public String getDisplayName() {
+        return displayName;
+    }
+
     public String getUuid() {
         return uuid;
     }
@@ -115,7 +128,7 @@ public class BCPlayer {
     }
 
     public void setServerLimit(int serverLimit) {
-        BedrockConnect.data.setValueInt("serverLimit", serverLimit, uuid);
+        BedrockConnect.getDataUtil().setValueInt("serverLimit", serverLimit, uuid);
         this.serverLimit = serverLimit;
     }
 
@@ -128,13 +141,13 @@ public class BCPlayer {
 
         TextPacket text = new TextPacket();
         text.setType(TextPacket.Type.TIP);
-        text.setMessage("==!!== Crouch or punch to re-trigger the popup ==!!==");
+        text.setMessage(BedrockConnect.getConfig().getLanguage().getWording("retriggerMsg", "tip"));
         text.setXuid(uuid);
         session.sendPacket(text);
 
         TextPacket text2 = new TextPacket();
         text2.setType(TextPacket.Type.RAW);
-        text2.setMessage("\n\n\n\n\n\n\n\n\n\n\n\n\n\n==!!== Crouch or punch to re-trigger the popup ==!!==\n\n\n\n\n\n\n\n\n\n\n");
+        text2.setMessage(BedrockConnect.getConfig().getLanguage().getWording("retriggerMsg", "chat"));
         text2.setXuid(uuid);
         session.sendPacket(text2);
     }
@@ -154,6 +167,19 @@ public class BCPlayer {
     public void setSelectedGroup(int group) { selectedGroup = group; }
 
     public int getSelectedGroup() { return selectedGroup; }
+
+    public boolean isNewPlayer() { return newPlayer; }
+
+    public LocalDateTime getViewedMotd() { return viewedMotd; }
+
+    public boolean canShowMotd() {
+        if (!BedrockConnect.getConfig().isShowingMotdFirstJoin() && isNewPlayer()) return false;
+
+        if (BedrockConnect.getConfig().isMotdCooldownEnabled() && viewedMotd != null) 
+            return LocalDateTime.now().isAfter(viewedMotd.plusDays(BedrockConnect.getConfig().getMotdCooldown()));
+        
+        return true;
+    }
 
     public void movementOpen() {
 
@@ -198,7 +224,10 @@ public class BCPlayer {
                 form = UIForms.createRemoveServer(getServerList());
                 break;
             case UIForms.SERVER_GROUP:
-                form = UIForms.createServerGroup((CustomServerGroup) CustomServerHandler.getServers()[getSelectedGroup()], session);
+                form = UIForms.createServerGroup((CustomServerGroup) BedrockConnect.getConfig().getCustomServers()[getSelectedGroup()], session);
+                break;
+            case UIForms.MOTD:
+                form = UIForms.createMotd();
                 break;
             default:
                 form = UIForms.createMain(getServerList(), session);
@@ -213,6 +242,21 @@ public class BCPlayer {
     }
 
     public void joinGame() {
+        JigsawStructureDataPacket jigsawStructureDataPacket = new JigsawStructureDataPacket();
+        Map<String, Object> map = new HashMap<String, Object>() {{
+            put("processors", NbtList.EMPTY);
+            put("template_pools", NbtList.EMPTY);
+            put("jigsaws", NbtList.EMPTY);
+            put("structure_sets", NbtList.EMPTY);
+        }};
+        jigsawStructureDataPacket.setJigsawStructureDataTag(NbtMap.fromMap(map));
+        session.sendPacket(jigsawStructureDataPacket);
+
+        VoxelShapesPacket voxelShapesPacket = new VoxelShapesPacket();
+        voxelShapesPacket.setNameMap(new HashMap<>());
+        voxelShapesPacket.setShapes(new ArrayList<>());
+        session.sendPacket(voxelShapesPacket);
+
         StartGamePacket startGamePacket = new StartGamePacket();
         startGamePacket.setUniqueEntityId(1);
         startGamePacket.setRuntimeEntityId(1);
@@ -231,13 +275,10 @@ public class BCPlayer {
         startGamePacket.setDefaultSpawn(Vector3i.ZERO);
         startGamePacket.setAchievementsDisabled(false);
         startGamePacket.setCurrentTick(-1);
-        //startGamePacket.setUnknownInt0(-1);
-        //startGamePacket.setUnknownInt1(-1);
         startGamePacket.setEduEditionOffers(0);
         startGamePacket.setEduFeaturesEnabled(false);
         startGamePacket.setRainLevel(0);
         startGamePacket.setLightningLevel(0);
-        //startGamePacket.setPlatformLockedContentConfirmed(false);
         startGamePacket.setMultiplayerGame(true);
         startGamePacket.setBroadcastingToLan(true);
         startGamePacket.getGamerules().add((new GameRuleData<>("showcoordinates", false)));
@@ -261,17 +302,15 @@ public class BCPlayer {
         startGamePacket.setEducationProductionId("");
         startGamePacket.setForceExperimentalGameplay(OptionalBoolean.empty());
 
-        startGamePacket.setAuthoritativeMovementMode(AuthoritativeMovementMode.CLIENT);
+        startGamePacket.setAuthoritativeMovementMode(AuthoritativeMovementMode.SERVER_WITH_REWIND);
         startGamePacket.setRewindHistorySize(0);
-        startGamePacket.setServerAuthoritativeBlockBreaking(false);
-        //startGamePacket.setTrial(false);
+        startGamePacket.setServerAuthoritativeBlockBreaking(true);
         startGamePacket.setVanillaVersion("*");
         startGamePacket.setInventoriesServerAuthoritative(true);
         startGamePacket.setServerEngine("");
 
         startGamePacket.setLevelId("world");
         startGamePacket.setLevelName("world");
-        //startGamePacket.setWorldName("world");
         startGamePacket.setPremiumWorldTemplateId("00000000-0000-0000-0000-000000000000");
         startGamePacket.setCurrentTick(0);
         startGamePacket.setEnchantmentSeed(0);
@@ -279,16 +318,16 @@ public class BCPlayer {
         startGamePacket.setServerEngine("");
         startGamePacket.setPlayerPropertyData(NbtMap.EMPTY);
         startGamePacket.setWorldTemplateId(UUID.randomUUID());
+        startGamePacket.setOwnerId("");
 
         startGamePacket.setChatRestrictionLevel(ChatRestrictionLevel.NONE);
 
-        startGamePacket.setBlockPalette(BedrockConnect.paletteManager.CACHED_PALLETE);
-
         session.sendPacket(startGamePacket);
 
-        // Required to be sent for 1.16.100
+        ItemComponentPacket componentPacket = new ItemComponentPacket();
+        session.sendPacket(componentPacket);
+
         CreativeContentPacket creativeContentPacket = new CreativeContentPacket();
-        creativeContentPacket.setContents(new ItemData[0]);
         session.sendPacket(creativeContentPacket);
 
         spawn();
@@ -311,14 +350,6 @@ public class BCPlayer {
             }
         }
 
-        BiomeDefinitionListPacket biomePacket = new BiomeDefinitionListPacket();
-        biomePacket.setDefinitions(BedrockConnect.paletteManager.BIOMES);
-        session.sendPacket(biomePacket);
-
-        AvailableEntityIdentifiersPacket entityPacket = new AvailableEntityIdentifiersPacket();
-        entityPacket.setIdentifiers(BedrockConnect.paletteManager.ENTITY_IDENTIFIERS);
-        session.sendPacket(entityPacket);
-
         PlayStatusPacket playStatus = new PlayStatusPacket();
         playStatus.setStatus(PlayStatusPacket.Status.PLAYER_SPAWN);
         session.sendPacket(playStatus);
@@ -326,6 +357,7 @@ public class BCPlayer {
         UpdateAttributesPacket attributesPacket = new UpdateAttributesPacket();
         attributesPacket.setRuntimeEntityId(0);
         List<AttributeData> attributes = new ArrayList<>();
+
         // Default move speed
         // Bedrock clients move very fast by default until they get an attribute packet correcting the speed
         attributes.add(new AttributeData("minecraft:movement", 0.0f, 1024f, 0.1f, 0.1f));
